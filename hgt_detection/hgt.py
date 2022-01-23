@@ -9,7 +9,7 @@ from Bio.SeqRecord import SeqRecord
 import json
 import argparse
 import pandas as pd
-from plotting import plot_alignment, plot_genbank
+from .plotting import plot_alignment, plot_genbank
 
 
 class Hgt:
@@ -27,26 +27,20 @@ class Hgt:
             args.references, fasta) for fasta in listdir(args.references)}
         # Fasta of sample assembly
         self.query = args.query_genome
-        self.query_strain = path_split(self.query)[-1].split('.')[0]
-        self.query_contigs = [contig for contig in SeqIO.parse(
-            self.query, 'genbank')]
-        with open(join(args.references, self.query_strain+'.fasta'),'w' ) as handle:
-            SeqIO.write(self.query_contigs, handle, 'fasta')
         # Strain of query genome
-        self.references[self.query_strain] = join(
-            args.references, self.query_strain+'.fasta')
+        self.query_strain = args.strain
         # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
         # Step size for sliding windows algorithm
-        self.step = 10000
-        self.window_size = 50000
+        self.step = 100
+        self.window_size = 500
         # Dictionary storing origins of sequence in assembly
         self.origins = {contig.id: dict() for contig in self.query_contigs}
         # Filtered origins
         self.filtered = {contig.id: dict() for contig in self.query_contigs}
 
-        plots = join(self.out_dir, 'plots')
+        plots = join(self.out_dir,'plots')
         if not exists(plots):
             mkdir(plots)
 
@@ -136,7 +130,7 @@ class Hgt:
             # Iterating over all reads
             # Read must be primary,mapped and have quality of 60
             for read in a:
-                if (not read.is_unmapped) & (not read.is_secondary) & (read.mapq == 60):
+                if (not read.is_unmapped) & (not read.is_secondary):
                     reads.append(read)
             # Appends contig name of reference
             for read in reads:
@@ -200,7 +194,7 @@ class Hgt:
         df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
 
     def plot_hgts(self):
-        out = join(self.out_dir, 'plots', 'hgt_alignments')
+        out = join(self.out_dir, 'plots','hgt_alignments')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
@@ -219,7 +213,7 @@ class Hgt:
                 plot_alignment(bam, read_names, name, out)
 
     def annotate_hgts(self):
-        out = join(self.out_dir, 'plots', 'hgt_annotations')
+        out = join(self.out_dir, 'plots','hgt_annotations')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
@@ -227,24 +221,3 @@ class Hgt:
             c = row['chromosome']
             p = row['position']
             plot_genbank(self.query_contigs, c, p, out)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Detect HGTs in bacterial communities. Fast and simpple.')
-    parser.add_argument(
-        'references', help='folder containg all reference genomes in fasta format.\
-            Prefix of fasta file will be interpreted as strain name.'
-    )
-    parser.add_argument(
-        'query_genome', help='Query genome in genbank from which HGT should be detected.')
-    parser.add_argument(
-        'out_dir', help='output directory for storing files and plots')
-    parser.add_argument(
-        '--plot', help='if this flag is added the alignment of every hgt and the annotation of the hgt is plotted. Its fast.', action='store_true')
-
-    return parser.parse_args()
-
-
-args = parse_args()
-hgt = Hgt(args)

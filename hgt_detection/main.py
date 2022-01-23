@@ -10,7 +10,9 @@ def parse_args():
             Prefix of fasta file will be interpreted as strain name.'
     )
     parser.add_argument(
-        'query_genome', help='query genome in genbank from which HGT should be detected.')
+        'query_genome', help='Query genome in genbank from which HGT should be detected.')
+    parser.add_argument(
+        'strain', help='Strain name for filtering input.')
     parser.add_argument('out_dir', help='output directory for storing files and plots')
     parser.add_argument('--plot', help='if this flag is added the alignment of every hgt and the annotation of the hgt is plotted. Its fast.', action='store_true')
 

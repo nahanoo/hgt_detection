@@ -7,7 +7,7 @@ def plot_alignment(bam, read_names, name, out):
     contigs = dict()
     reads = []
     for read in a:
-        if (not read.is_unmapped) & (not read.is_secondary) & (read.mapq == 60) & (read.qname in read_names):
+        if (not read.is_unmapped) & (read.qname in read_names) & (not read.is_secondary):
             reads.append(read)
     for read in reads:
         if read.is_reverse:
@@ -35,7 +35,7 @@ def plot_alignment(bam, read_names, name, out):
         record = GraphicRecord(
             sequence_length=sorted(ends)[-1], features=features)
         record = record.crop((sorted(starts)[0], sorted(ends)[-1]))
-        name = '.'.join(name.split('.') + [contig, '.pdf'])
+        name = '.'.join(name.split('.') + [contig, 'pdf'])
         record.plot_on_multiple_pages(join(out, name),
                                       nucl_per_line=sorted(
                                           ends)[-1] - sorted(starts)[0],
@@ -72,7 +72,7 @@ def plot_genbank(genbank_list, chromosome, position, out):
                 pass
     record = GraphicRecord(sequence_length=end, features=features)
     record = record.crop((start, end))
-    f_name = '.'.join([chromosome, str(position), '.pdf'])
+    f_name = '.'.join([chromosome, str(position), 'pdf'])
     record.plot_on_multiple_pages(join(out, f_name),
                                   nucl_per_line=(end-start)/3,
                                   lines_per_page=10,
