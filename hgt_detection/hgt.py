@@ -1,6 +1,6 @@
-from importlib.resources import path
 from os.path import join, split as path_split, exists
 from os import listdir, mkdir
+from pyexpat import features
 from Bio import SeqIO
 from subprocess import call, DEVNULL, STDOUT
 import subprocess
@@ -9,7 +9,8 @@ from Bio.SeqRecord import SeqRecord
 import json
 import argparse
 import pandas as pd
-from plotting import plot_alignment
+from .plotting import plot_alignment, plot_genbank
+
 
 class Hgt:
     """This class chunks a genetic sequence (can be a read or
@@ -28,16 +29,20 @@ class Hgt:
         self.query = args.query_genome
         # Strain of query genome
         self.query_strain = path_split(self.query)[-1].split('.')[0]
-        # Contigs in dict form
+        # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
         # Step size for sliding windows algorithm
-        self.step = 200
-        self.window_size = 1000
+        self.step = 10000
+        self.window_size = 50000
         # Dictionary storing origins of sequence in assembly
         self.origins = {contig.id: dict() for contig in self.query_contigs}
         # Filtered origins
         self.filtered = {contig.id: dict() for contig in self.query_contigs}
+
+        plots = join(self.out_dir,'plots')
+        if not exists(plots):
+            mkdir(plots)
 
     def get_reference_names(self):
         """Returns dictionary. Reference_names with contig
@@ -89,7 +94,7 @@ class Hgt:
         for strain, reference in self.references.items():
             # Query sequences created with chunk_assembly()
             sam = join(self.out_dir, strain + ".sam")
-            self.bam = join(self.out_dir, strain + "aligned.sorted.bam")
+            bam = join(self.out_dir, strain + ".sorted.bam")
             cmd = [
                 "minimap2",
                 "-ax",
@@ -102,11 +107,11 @@ class Hgt:
             # Calling minimap and surpressing stdout
             call(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL,
                  stderr=STDOUT)
-            cmd = ['samtools', 'sort', '-o', self.bam, sam]
+            cmd = ['samtools', 'sort', '-o', bam, sam]
             # Calling samtools and surpressing stdout
             call(" ".join(cmd), shell=True, stdout=DEVNULL,
                  stderr=STDOUT)
-            cmd = ['samtools', 'index', self.bam]
+            cmd = ['samtools', 'index', bam]
             # Calling samtools and surpressing stdout
             call(" ".join(cmd), shell=True, stdout=DEVNULL,
                  stderr=STDOUT)
@@ -189,7 +194,7 @@ class Hgt:
         df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
 
     def plot_hgts(self):
-        out = join(self.out_dir, 'plots')
+        out = join(self.out_dir, 'plots','hgt_alignments')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
@@ -200,13 +205,22 @@ class Hgt:
             origins = [element.lstrip() for element in origins.split(',')]
             origins = origins + [self.query_strain]
             for origin in set(origins):
-                bam = join(self.out_dir, origin + 'aligned.sorted.bam')
+                bam = join(self.out_dir, origin + '.sorted.bam')
                 steps = int(p/self.step)
                 read_names = ['.'.join([c, str(step)])
                               for step in range(steps-10, steps+10)]
                 name = '.'.join([c, str(p), origin])
                 plot_alignment(bam, read_names, name, out)
 
+    def annotate_hgts(self):
+        out = join(self.out_dir, 'plots','hgt_annotations')
+        if not exists(out):
+            mkdir(out)
+        df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
+        for i, row in df.iterrows():
+            c = row['chromosome']
+            p = row['position']
+            plot_genbank(self.query_contigs, c, p, out)
 
 
 def parse_args():
@@ -226,3 +240,9 @@ def parse_args():
 
 args = parse_args()
 hgt = Hgt(args)
+hgt.chunk_assembly()
+hgt.mapper()
+hgt.get_mapping_stats()
+hgt.dump_origins()
+hgt.annotate_hgts()
+hgt.plot_hgts()
