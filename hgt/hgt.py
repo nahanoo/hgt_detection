@@ -1,13 +1,15 @@
-from os.path import join
-from os import listdir
+from importlib.resources import path
+from os.path import join, split as path_split, exists
+from os import listdir, mkdir
 from Bio import SeqIO
-from subprocess import call
+from subprocess import call, DEVNULL, STDOUT
 import subprocess
 import pysam
 from Bio.SeqRecord import SeqRecord
 import json
 import argparse
-
+import pandas as pd
+from plotting import plot_alignment
 
 class Hgt:
     """This class chunks a genetic sequence (can be a read or
@@ -17,34 +19,32 @@ class Hgt:
     are returned."""
 
     def __init__(self, args):
+        # Out direcotry to write files
+        self.out_dir = args.out_dir
         # Dictionary with sample info from Sample class
         self.references = {fasta.split('.')[0]: join(
             args.references, fasta) for fasta in listdir(args.references)}
         # Fasta of sample assembly
-        query = args.query_genome
+        self.query = args.query_genome
+        # Strain of query genome
+        self.query_strain = path_split(self.query)[-1].split('.')[0]
         # Contigs in dict form
-        self.contigs = self.get_contigs(query)
-        # Out direcotry to write files
-        self.out_dir = args.out_dir
+        self.query_contigs = [contig for contig in SeqIO.parse(
+            self.query, 'genbank')]
         # Step size for sliding windows algorithm
-        self.step = None
+        self.step = 200
+        self.window_size = 1000
         # Dictionary storing origins of sequence in assembly
-        self.origins = {key: dict() for key in self.contigs.keys()}
+        self.origins = {contig.id: dict() for contig in self.query_contigs}
         # Filtered origins
-        self.filtered = {key: dict() for key in self.contigs.keys()}
-
-    def get_contigs(self, fasta):
-        """Parses fastas and returns dictionary with contig name as
-        key and sequence as value."""
-        return {contig.id: contig.seq for contig in SeqIO.parse(fasta, "fasta")}
-
+        self.filtered = {contig.id: dict() for contig in self.query_contigs}
 
     def get_reference_names(self):
         """Returns dictionary. Reference_names with contig
         names as keys and strain as value."""
         reference_names = {}
         for strain, reference in self.references.items():
-            for contig in SeqIO.parse(reference,'fasta'):
+            for contig in SeqIO.parse(reference, 'fasta'):
                 reference_names[contig.id] = strain
         return reference_names
 
@@ -55,7 +55,6 @@ class Hgt:
         # List which stores all chunks
         seqs = []
         seqlen = len(seq)
-        self.step = step
         for counter, i in enumerate(range(0, seqlen, step)):
             # Returns ether entire sequence or window depending on sequence length
             j = seqlen if i + window_size > seqlen else i + window_size
@@ -71,12 +70,11 @@ class Hgt:
         """Chunks an assembly of multiple contigs into different 
         chunks using a sliding window algorightm (see chunker function)."""
         assembly_chunks = []
-        window = 500
-        self.step = 100
-        for name, contig in self.contigs.items():
-            record = SeqRecord(contig, id=name)
+        for contig in self.query_contigs:
+            #record = SeqRecord(contig, id=name)
             # Creates chunks of every contig
-            assembly_chunks += self.chunker(record, window, self.step)
+            assembly_chunks += self.chunker(contig,
+                                            self.window_size, self.step)
         target = join(self.out_dir,
                       "chunked_sequences.fasta")
         # Dumps chunks to fasta
@@ -88,9 +86,10 @@ class Hgt:
         experiment with minimap2.
         Minimap2 settings are set to accureate PacBio reads."""
         reads = join(self.out_dir, "chunked_sequences.fasta")
-        for strain,reference in self.references.items():
+        for strain, reference in self.references.items():
             # Query sequences created with chunk_assembly()
-            sam = join(self.out_dir,strain + ".sam")
+            sam = join(self.out_dir, strain + ".sam")
+            self.bam = join(self.out_dir, strain + "aligned.sorted.bam")
             cmd = [
                 "minimap2",
                 "-ax",
@@ -102,7 +101,15 @@ class Hgt:
             ]
             # Calling minimap and surpressing stdout
             call(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL,
-                 stderr=subprocess.STDOUT)
+                 stderr=STDOUT)
+            cmd = ['samtools', 'sort', '-o', self.bam, sam]
+            # Calling samtools and surpressing stdout
+            call(" ".join(cmd), shell=True, stdout=DEVNULL,
+                 stderr=STDOUT)
+            cmd = ['samtools', 'index', self.bam]
+            # Calling samtools and surpressing stdout
+            call(" ".join(cmd), shell=True, stdout=DEVNULL,
+                 stderr=STDOUT)
 
     def get_mapping_stats(self):
         """Checks all mapped sequences and returns contig name
@@ -127,7 +134,6 @@ class Hgt:
                 # First part is contig name, second number is n step
                 # step size is known and position therefore as well
                 name = '.'.join(read.qname.split('.')[:-1])
-                print(name,self.step)
                 pos = int(read.qname.split('.')[-1])*self.step
                 # Iteratign over aligned query sequence
                 for j in range(pos+read.query_alignment_start, pos+read.query_alignment_end):
@@ -143,6 +149,28 @@ class Hgt:
                         self.origins[name][j].append(
                             reference_names[read.reference_name])
 
+    def concat_origins(self):
+        """Concats origins. In input every position has strain info.
+        This function concatenates positions following eachother and
+        outputs the start position and the length of the foreing origin."""
+        df = pd.DataFrame(
+            columns=['chromosome', 'position', 'length', 'origins'])
+        i = -1
+        for name, contigs in self.filtered.items():
+            # Previous pos
+            prev = 0
+            # Previous strain
+            prev_strains = None
+            for pos, strains in contigs.items():
+                if (pos - 1 == prev) & (prev_strains == strains):
+                    df.at[i, 'length'] += 1
+                else:
+                    i += 1
+                    df.loc[i] = [name, pos, 1, strains]
+                prev = pos
+                prev_strains = strains
+        return df
+
     def dump_origins(self):
         """Filters identified origins and dumps to json. Only positions
         with either two different origins or an origin which is not anceteral
@@ -150,13 +178,35 @@ class Hgt:
         for name, contig in self.origins.items():
             for pos, strains in contig.items():
                 # Applying filter
-                if (len(set(strains)) > 1) or (strains[0] != self.sample['strain']):
+                if (len(set(strains)) > 1) or (list(set(strains))[0] != self.query_strain):
                     self.filtered[name][pos] = list(set(strains))
-
+        df = self.concat_origins()
+        df['origins'] = [', '.join(map(str, l)) for l in df['origins']]
         # Dumping to json
         j_f = json.dumps(self.filtered, indent=4)
-        with open(join(self.sample['dir_name'], 'origins.json'), 'w') as handle:
+        with open(join(self.out_dir, 'origins.json'), 'w') as handle:
             handle.write(j_f)
+        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
+
+    def plot_hgts(self):
+        out = join(self.out_dir, 'plots')
+        if not exists(out):
+            mkdir(out)
+        df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
+        for i, row in df.iterrows():
+            c = row['chromosome']
+            p = row['position']
+            origins = row['origins']
+            origins = [element.lstrip() for element in origins.split(',')]
+            origins = origins + [self.query_strain]
+            for origin in set(origins):
+                bam = join(self.out_dir, origin + 'aligned.sorted.bam')
+                steps = int(p/self.step)
+                read_names = ['.'.join([c, str(step)])
+                              for step in range(steps-10, steps+10)]
+                name = '.'.join([c, str(p), origin])
+                plot_alignment(bam, read_names, name, out)
+
 
 
 def parse_args():
