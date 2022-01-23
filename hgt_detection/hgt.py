@@ -9,7 +9,7 @@ from Bio.SeqRecord import SeqRecord
 import json
 import argparse
 import pandas as pd
-from .plotting import plot_alignment, plot_genbank
+from plotting import plot_alignment, plot_genbank
 
 
 class Hgt:
@@ -27,8 +27,14 @@ class Hgt:
             args.references, fasta) for fasta in listdir(args.references)}
         # Fasta of sample assembly
         self.query = args.query_genome
-        # Strain of query genome
         self.query_strain = path_split(self.query)[-1].split('.')[0]
+        self.query_contigs = [contig for contig in SeqIO.parse(
+            self.query, 'genbank')]
+        with open(join(args.references, self.query_strain+'.fasta'),'w' ) as handle:
+            SeqIO.write(self.query_contigs, handle, 'fasta')
+        # Strain of query genome
+        self.references[self.query_strain] = join(
+            args.references, self.query_strain+'.fasta')
         # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
@@ -40,7 +46,7 @@ class Hgt:
         # Filtered origins
         self.filtered = {contig.id: dict() for contig in self.query_contigs}
 
-        plots = join(self.out_dir,'plots')
+        plots = join(self.out_dir, 'plots')
         if not exists(plots):
             mkdir(plots)
 
@@ -194,7 +200,7 @@ class Hgt:
         df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
 
     def plot_hgts(self):
-        out = join(self.out_dir, 'plots','hgt_alignments')
+        out = join(self.out_dir, 'plots', 'hgt_alignments')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
@@ -213,7 +219,7 @@ class Hgt:
                 plot_alignment(bam, read_names, name, out)
 
     def annotate_hgts(self):
-        out = join(self.out_dir, 'plots','hgt_annotations')
+        out = join(self.out_dir, 'plots', 'hgt_annotations')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
@@ -225,24 +231,20 @@ class Hgt:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Detect HGT in bacterial communities. Fast and simpple.')
+        description='Detect HGTs in bacterial communities. Fast and simpple.')
     parser.add_argument(
         'references', help='folder containg all reference genomes in fasta format.\
             Prefix of fasta file will be interpreted as strain name.'
     )
     parser.add_argument(
-        'query_genome', help='query genome from which HGT should be detected.\
-            Input fomrat needs to be fasta for now.')
-    parser.add_argument('out_dir', help='output directory for dumping csv')
+        'query_genome', help='Query genome in genbank from which HGT should be detected.')
+    parser.add_argument(
+        'out_dir', help='output directory for storing files and plots')
+    parser.add_argument(
+        '--plot', help='if this flag is added the alignment of every hgt and the annotation of the hgt is plotted. Its fast.', action='store_true')
 
     return parser.parse_args()
 
 
 args = parse_args()
 hgt = Hgt(args)
-hgt.chunk_assembly()
-hgt.mapper()
-hgt.get_mapping_stats()
-hgt.dump_origins()
-hgt.annotate_hgts()
-hgt.plot_hgts()
