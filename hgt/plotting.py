@@ -35,8 +35,8 @@ def plot_alignment(bam, read_names, name, out):
         record = GraphicRecord(
             sequence_length=sorted(ends)[-1], features=features)
         record = record.crop((sorted(starts)[0], sorted(ends)[-1]))
-        name = '.'.join(name.split('.') + [contig, 'pdf'])
-        record.plot_on_multiple_pages(join(out, name),
+        f_name = '.'.join(name.split('.') + [contig, 'pdf'])
+        record.plot_on_multiple_pages(join(out, f_name),
                                       nucl_per_line=sorted(
                                           ends)[-1] - sorted(starts)[0],
                                       lines_per_page=10,
