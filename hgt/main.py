@@ -4,13 +4,13 @@ from .hgt import Hgt
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Detect HGTs in bacterial communities. Fast and simpple.')
+        description='Detect HGTs in evolved bacterial samples. Tested with PacBio data.')
     parser.add_argument(
         'references', help='folder containg all reference genomes in fasta format.\
             Prefix of fasta file will be interpreted as strain name.'
     )
     parser.add_argument(
-        'query_genome', help='query genome in genbank from which HGT should be detected.')
+        'query_genome', help='query genome in genbank from which HGTs should be detected.')
     parser.add_argument(
         'strain', help='strain name for filtering output.')
     parser.add_argument('out_dir', help='output directory for storing files and plots')

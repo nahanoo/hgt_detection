@@ -13,19 +13,21 @@ from .plotting import plot_alignment, plot_genbank
 
 
 class Hgt:
-    """This class chunks a genetic sequence (can be a read or
-    an assembly) with a sliding window algorithm. Chunks are
-    then mapped to all ancestreal genomes from an experiment
-    and the contig name of the reference where the chunks align
-    are returned."""
+    """This is a simple class for detecting HGTs in mutated
+    bacterial strains. It chunks the query genome into smaller
+    sequences using a sliding window algorithm. Those sequences
+    are aligned to all parsed reference genomes.
+    All positions with foreign sequences are outputted as a tsv.
+    Additionally it annotates the foreign sequences and plots
+    the alignemnt to all reference genomes."""
 
     def __init__(self, args):
         # Out direcotry to write files
         self.out_dir = args.out_dir
-        # Dictionary with sample info from Sample class
+        # Strain name and path of references
         self.references = {fasta.split('.')[0]: join(
             args.references, fasta) for fasta in listdir(args.references)}
-        # Fasta of sample assembly
+        # Genbank of sample assembly
         self.query = args.query_genome
         # Strain of query genome
         self.query_strain = args.strain
@@ -34,15 +36,18 @@ class Hgt:
             self.query, 'genbank')]
         # Step size for sliding windows algorithm
         self.step = 100
+        # Window size for sliding window algorithm
         self.window_size = 500
         # Dictionary storing origins of sequence in assembly
         self.origins = {contig.id: dict() for contig in self.query_contigs}
-        # Filtered origins
+        # Dictionary for storing filtered origins
         self.filtered = {contig.id: dict() for contig in self.query_contigs}
 
-        plots = join(self.out_dir,'plots')
-        if not exists(plots):
-            mkdir(plots)
+        # If plots should be generated directory is created
+        if args.plot:
+            plots = join(self.out_dir, 'plots')
+            if not exists(plots):
+                mkdir(plots)
 
     def get_reference_names(self):
         """Returns dictionary. Reference_names with contig
@@ -76,7 +81,6 @@ class Hgt:
         chunks using a sliding window algorightm (see chunker function)."""
         assembly_chunks = []
         for contig in self.query_contigs:
-            #record = SeqRecord(contig, id=name)
             # Creates chunks of every contig
             assembly_chunks += self.chunker(contig,
                                             self.window_size, self.step)
@@ -128,16 +132,13 @@ class Hgt:
             a = pysam.AlignmentFile(sam, "rb")
             reads = []
             # Iterating over all reads
-            # Read must be primary,mapped and have quality of 60
+            # Read must be primary,mapped
             for read in a:
-                if (not read.is_unmapped) & (not read.is_secondary):
+                if (not read.is_unmapped):
                     reads.append(read)
-            # Appends contig name of reference
             for read in reads:
-                # Contig and position of query sequence form assembly are
-                # stored in contig name
+                # Contig and position of query sequence form assembly are stored in contig name
                 # First part is contig name, second number is n step
-                # step size is known and position therefore as well
                 name = '.'.join(read.qname.split('.')[:-1])
                 pos = int(read.qname.split('.')[-1])*self.step
                 # Iteratign over aligned query sequence
@@ -148,16 +149,14 @@ class Hgt:
                         # Appending strain at given position
                         self.origins[name][j].append(
                             reference_names[read.reference_name])
-
                     else:
                         # Appending strain at given position
                         self.origins[name][j].append(
                             reference_names[read.reference_name])
 
     def concat_origins(self):
-        """Concats origins. In input every position has strain info.
-        This function concatenates positions following eachother and
-        outputs the start position and the length of the foreing origin."""
+        """Concats origins. Outputs the start position and the length 
+        of the foreing origin."""
         df = pd.DataFrame(
             columns=['chromosome', 'position', 'length', 'origins'])
         i = -1
@@ -186,17 +185,20 @@ class Hgt:
                 if (len(set(strains)) > 1) or (list(set(strains))[0] != self.query_strain):
                     self.filtered[name][pos] = list(set(strains))
         df = self.concat_origins()
+        # Creating string of origins stored as list
         df['origins'] = [', '.join(map(str, l)) for l in df['origins']]
-        # Dumping to json
+        # Dumping to json and tsv
         j_f = json.dumps(self.filtered, indent=4)
         with open(join(self.out_dir, 'origins.json'), 'w') as handle:
             handle.write(j_f)
-        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
+        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
 
     def plot_hgts(self):
-        out = join(self.out_dir, 'plots','hgt_alignments')
+        # Create plot dir
+        out = join(self.out_dir, 'plots', 'hgt_alignments')
         if not exists(out):
             mkdir(out)
+        # Reads identified origins
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
         for i, row in df.iterrows():
             c = row['chromosome']
@@ -207,13 +209,15 @@ class Hgt:
             for origin in set(origins):
                 bam = join(self.out_dir, origin + '.sorted.bam')
                 steps = int(p/self.step)
+                # Creating reads of interest
                 read_names = ['.'.join([c, str(step)])
                               for step in range(steps-10, steps+10)]
                 name = '.'.join([c, str(p), origin])
                 plot_alignment(bam, read_names, name, out)
 
     def annotate_hgts(self):
-        out = join(self.out_dir, 'plots','hgt_annotations')
+        # Create plot out dir
+        out = join(self.out_dir, 'plots', 'hgt_annotations')
         if not exists(out):
             mkdir(out)
         df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
