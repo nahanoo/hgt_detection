@@ -1,13 +1,10 @@
 from os.path import join, split as path_split, exists
 from os import listdir, mkdir
-from pyexpat import features
 from Bio import SeqIO
 from subprocess import call, DEVNULL, STDOUT
 import subprocess
 import pysam
-from Bio.SeqRecord import SeqRecord
 import json
-import argparse
 import pandas as pd
 from .plotting import plot_alignment, plot_genbank
 
@@ -42,6 +39,9 @@ class Hgt:
         self.origins = {contig.id: dict() for contig in self.query_contigs}
         # Dictionary for storing filtered origins
         self.filtered = {contig.id: dict() for contig in self.query_contigs}
+        # Dataframe for anntoations
+        self.annotated = pd.DataFrame(columns=['chromosome','position','length','product'])
+
 
         # If plots should be generated directory is created
         if args.plot:
@@ -175,6 +175,31 @@ class Hgt:
                 prev_strains = strains
         return df
 
+    def annotate_hgts(self,df):
+        genbank = {contig.id: {} for contig in self.query_contigs}
+        for contig in self.query_contigs:
+            for feature in contig.features:
+                try:
+                    start = feature.location.start
+                    end = feature.location.end
+                    product = feature.qualifiers['product']
+                    genbank[contig.id][(start, end)] = product[0]
+                except KeyError:
+                    pass
+        i = 0
+        for counter,row in df.iterrows():
+            c = row['chromosome']
+            p = row['position']
+            l = row['length']
+            for j in range(p,p+l):
+                for (start, end), product in genbank[c].items():
+                    if (j >= start) & (j <= end):
+                        self.annotated.loc[i] = [c, p, l, product]
+                        i += 1
+        self.annotated = self.annotated.drop_duplicates()
+
+
+
     def dump_origins(self):
         """Filters identified origins and dumps to json. Only positions
         with either two different origins or an origin which is not anceteral
@@ -187,11 +212,13 @@ class Hgt:
         df = self.concat_origins()
         # Creating string of origins stored as list
         df['origins'] = [', '.join(map(str, l)) for l in df['origins']]
+        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
         # Dumping to json and tsv
+        self.annotate_hgts(df)
         j_f = json.dumps(self.filtered, indent=4)
         with open(join(self.out_dir, 'origins.json'), 'w') as handle:
             handle.write(j_f)
-        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
+        self.annotated.to_csv(join(self.out_dir, 'origins.annotated.tsv'), sep='\t', index=False)
 
     def plot_hgts(self):
         # Create plot dir
@@ -215,7 +242,7 @@ class Hgt:
                 name = '.'.join([c, str(p), origin])
                 plot_alignment(bam, read_names, name, out)
 
-    def annotate_hgts(self):
+    def plot_hgt_annotations(self):
         # Create plot out dir
         out = join(self.out_dir, 'plots', 'hgt_annotations')
         if not exists(out):
