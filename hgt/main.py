@@ -26,5 +26,7 @@ def main():
     hgt.get_mapping_stats()
     hgt.dump_origins()
     if args.plot:
-        hgt.annotate_hgts()
+        hgt.plot_hgt_annotations()
         hgt.plot_hgts()
+
+main()
