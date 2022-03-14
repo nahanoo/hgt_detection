@@ -1,12 +1,13 @@
+from calendar import c
 from os.path import join, split as path_split, exists
 from os import listdir, mkdir
 from Bio import SeqIO
 from subprocess import call, DEVNULL, STDOUT
 import subprocess
 import pysam
-import json
+from Bio.SeqRecord import SeqRecord
 import pandas as pd
-#from .plotting import plot_alignment, plot_genbank
+from plotting import plot_alignment, plot_genbank
 
 
 class Hgt:
@@ -25,11 +26,13 @@ class Hgt:
         self.references = {fasta.split('.')[0]: join(
             args.references, fasta) for fasta in listdir(args.references)}
         # Genbank of sample assembly
-        self.query = args.query_genome
+        self.query = args.mutant
         # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
         self.query_features = self.parse_genbank()
+        # Ancestor fasta file
+        self.ancestor = args.ancestor
         # Step size for sliding windows algorithm
         self.step = 100
         # Window size for sliding window algorithm
@@ -84,9 +87,10 @@ class Hgt:
         for counter, i in enumerate(range(0, seqlen, step)):
             # Returns ether entire sequence or window depending on sequence length
             j = seqlen if i + window_size > seqlen else i + window_size
-            chunk = seq[i:j]
+            chunk_id = seq.id
+            chunk_seq = seq.seq[i:j]
             # Add chunk id to sequence id
-            chunk.id = chunk.id + "." + str(counter)
+            chunk = SeqRecord(seq=chunk_seq, id=chunk_id + "." + str(counter))
             seqs.append(chunk)
             if j == seqlen:
                 break
@@ -148,7 +152,7 @@ class Hgt:
             a = pysam.AlignmentFile(sam, "rb")
             reads = []
             # Iterating over all reads
-            # Read must be primary,mapped
+            # Read must be mapped
             for read in a:
                 if (not read.is_unmapped):
                     reads.append(read)
@@ -170,6 +174,24 @@ class Hgt:
                         self.origins[name][j].append(
                             reference_names[read.reference_name])
 
+    def annotate_hgts(self):
+        """Iterate over every detected hgt and check which product
+        was inserted."""
+        i = 0
+        for counter, (c,p,l,o) in self.origins_df.iterrows():
+            products = self.annotate_position(c, p, l)
+            for product in products:
+                self.annotated.loc[i] = [c, p, l, o, product]
+                i += 1
+
+    def annotate_position(self, c, p, l):
+        """Returns products in a region in a genbank."""
+        products = []
+        for (start, end), product in self.query_features[c].items():
+            if not set(range(start, end)).isdisjoint(range(p, p+l)):
+                products.append(product)
+        return products
+
     def concat_origins(self):
         """Concats origins. Outputs the start position and the length 
         of the foreing origin."""
@@ -180,6 +202,8 @@ class Hgt:
             # Previous strain
             prev_strains = None
             for pos, strains in contigs.items():
+                strains = ', '.join(list(set(strains)))
+                # Only concating when strains are identical
                 if (pos - 1 == prev) & (prev_strains == strains):
                     self.origins_df.at[i, 'length'] += 1
                 else:
@@ -188,24 +212,40 @@ class Hgt:
                 prev = pos
                 prev_strains = strains
 
-    def annotate_hgts(self):
-        i = 0
-        for counter, row in self.origins_df.iterrows():
-            c = row['chromosome']
-            p = row['position']
-            l = row['length']
-            o = row['origins']
-            products = self.annotate_position(c, p, l)
-            for product in products:
-                self.annotated.loc[i] = [c, p, l, o, product]
-
-    def annotate_position(self, c, p, l):
-        """Returns products in a region in a genbank."""
-        products = []
-        for (start, end), product in self.query_features[c].items():
-            if not set(range(start, end)).isdisjoint(range(p, p+l)):
-                products.append(product)
-        return products
+    def check_sequence(self):
+        """This checks if detected hgt was already present in ancestor."""
+        for i, (chromosome, position, length, origins) in self.origins_df.iterrows():
+            contigs = {contig.id: contig for contig in self.query_contigs}
+            # Minimal sequence size which works well with minimap2 is around 500
+            if length < 500:
+                length = 500
+            # Get correct padding
+            if position + length > len(contigs[chromosome]):
+                end = len(contigs[chromosome])
+            else:
+                end = length + position
+            # Hgt sequence and sam
+            query_seq = join(self.out_dir, 'query_seq.fasta')
+            query_sam = join(self.out_dir, 'query_sam.fasta')
+            # Dumping hgt sequence
+            seq_id = contigs[chromosome].id
+            seq = contigs[chromosome].seq[position:end]
+            with open(query_seq, 'w') as handle:
+                SeqIO.write(SeqRecord(seq=seq, id=seq_id), handle, 'fasta')
+            # Mapping hgt sequence to ancestor
+            cmd = ['minimap2', '-ax', 'asm5',
+                   self.ancestor, query_seq, '>', query_sam]
+            call(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL,
+                 stderr=STDOUT)
+            a = pysam.AlignmentFile(query_sam)
+            unique = True
+            # If sequence aligned to ancestor seq was already present
+            for read in a:
+                if (not read.is_unmapped):
+                    unique = False
+            if not unique:
+                self.origins_df.at[i, 'origins'] += ', ' + \
+                    path_split(self.ancestor)[-1].split('.')[0]
 
     def dump_origins(self):
         """Filters identified origins and dumps to json. Only positions
@@ -213,8 +253,7 @@ class Hgt:
         are of interest"""
         self.concat_origins()
         # Creating string of origins stored as list
-        self.origins['origins'] = [
-            ', '.join(map(str, l)) for l in self.origins_df['origins']]
+        self.check_sequence()
         self.origins_df.to_csv(
             join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
         # Dumping to json and tsv
@@ -228,8 +267,7 @@ class Hgt:
         if not exists(out):
             mkdir(out)
         # Reads identified origins
-        df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
-        for i, row in df.iterrows():
+        for i, row in self.origins_df.iterrows():
             c = row['chromosome']
             p = row['position']
             origins = row['origins']
