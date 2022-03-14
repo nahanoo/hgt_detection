@@ -6,7 +6,7 @@ import subprocess
 import pysam
 import json
 import pandas as pd
-from .plotting import plot_alignment, plot_genbank
+#from .plotting import plot_alignment, plot_genbank
 
 
 class Hgt:
@@ -26,28 +26,44 @@ class Hgt:
             args.references, fasta) for fasta in listdir(args.references)}
         # Genbank of sample assembly
         self.query = args.query_genome
-        # Strain of query genome
-        self.query_strain = args.strain
         # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
+        self.query_features = self.parse_genbank()
         # Step size for sliding windows algorithm
         self.step = 100
         # Window size for sliding window algorithm
         self.window_size = 500
         # Dictionary storing origins of sequence in assembly
         self.origins = {contig.id: dict() for contig in self.query_contigs}
-        # Dictionary for storing filtered origins
-        self.filtered = {contig.id: dict() for contig in self.query_contigs}
+        # Dataframe for origins
+        self.origins_df = pd.DataFrame(
+            columns=['chromosome', 'position', 'length', 'origins'])
         # Dataframe for anntoations
-        self.annotated = pd.DataFrame(columns=['chromosome','position','length','product'])
-
+        self.annotated = pd.DataFrame(
+            columns=['chromosome', 'position', 'length', 'origins', 'product'])
 
         # If plots should be generated directory is created
         if args.plot:
             plots = join(self.out_dir, 'plots')
             if not exists(plots):
                 mkdir(plots)
+
+    def parse_genbank(self):
+        """Parses all features of a genbanka and stores locations
+        and products in dictionary"""
+        genbank = {contig.id: {} for contig in self.query_contigs}
+        for contig in self.query_contigs:
+            for feature in contig.features:
+                # Some features don't have all desired keys
+                try:
+                    start = feature.location.start
+                    end = feature.location.end
+                    product = feature.qualifiers['product']
+                    genbank[contig.id][(start, end)] = product[0]
+                except KeyError:
+                    pass
+        return genbank
 
     def get_reference_names(self):
         """Returns dictionary. Reference_names with contig
@@ -157,68 +173,54 @@ class Hgt:
     def concat_origins(self):
         """Concats origins. Outputs the start position and the length 
         of the foreing origin."""
-        df = pd.DataFrame(
-            columns=['chromosome', 'position', 'length', 'origins'])
         i = -1
-        for name, contigs in self.filtered.items():
+        for name, contigs in self.origins.items():
             # Previous pos
             prev = 0
             # Previous strain
             prev_strains = None
             for pos, strains in contigs.items():
                 if (pos - 1 == prev) & (prev_strains == strains):
-                    df.at[i, 'length'] += 1
+                    self.origins_df.at[i, 'length'] += 1
                 else:
                     i += 1
-                    df.loc[i] = [name, pos, 1, strains]
+                    self.origins_df.loc[i] = [name, pos, 1, strains]
                 prev = pos
                 prev_strains = strains
-        return df
 
-    def annotate_hgts(self,df):
-        genbank = {contig.id: {} for contig in self.query_contigs}
-        for contig in self.query_contigs:
-            for feature in contig.features:
-                try:
-                    start = feature.location.start
-                    end = feature.location.end
-                    product = feature.qualifiers['product']
-                    genbank[contig.id][(start, end)] = product[0]
-                except KeyError:
-                    pass
+    def annotate_hgts(self):
         i = 0
-        for counter,row in df.iterrows():
+        for counter, row in self.origins_df.iterrows():
             c = row['chromosome']
             p = row['position']
             l = row['length']
-            for j in range(p,p+l):
-                for (start, end), product in genbank[c].items():
-                    if (j >= start) & (j <= end):
-                        self.annotated.loc[i] = [c, p, l, product]
-                        i += 1
-        self.annotated = self.annotated.drop_duplicates()
+            o = row['origins']
+            products = self.annotate_position(c, p, l)
+            for product in products:
+                self.annotated.loc[i] = [c, p, l, o, product]
 
-
+    def annotate_position(self, c, p, l):
+        """Returns products in a region in a genbank."""
+        products = []
+        for (start, end), product in self.query_features[c].items():
+            if not set(range(start, end)).isdisjoint(range(p, p+l)):
+                products.append(product)
+        return products
 
     def dump_origins(self):
         """Filters identified origins and dumps to json. Only positions
         with either two different origins or an origin which is not anceteral
         are of interest"""
-        for name, contig in self.origins.items():
-            for pos, strains in contig.items():
-                # Applying filter
-                if (len(set(strains)) > 1) or (list(set(strains))[0] != self.query_strain):
-                    self.filtered[name][pos] = list(set(strains))
-        df = self.concat_origins()
+        self.concat_origins()
         # Creating string of origins stored as list
-        df['origins'] = [', '.join(map(str, l)) for l in df['origins']]
-        df.to_csv(join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
+        self.origins['origins'] = [
+            ', '.join(map(str, l)) for l in self.origins_df['origins']]
+        self.origins_df.to_csv(
+            join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
         # Dumping to json and tsv
-        self.annotate_hgts(df)
-        j_f = json.dumps(self.filtered, indent=4)
-        with open(join(self.out_dir, 'origins.json'), 'w') as handle:
-            handle.write(j_f)
-        self.annotated.to_csv(join(self.out_dir, 'origins.annotated.tsv'), sep='\t', index=False)
+        self.annotate_hgts()
+        self.annotated.to_csv(
+            join(self.out_dir, 'origins.annotated.tsv'), sep='\t', index=False)
 
     def plot_hgts(self):
         # Create plot dir
@@ -232,7 +234,6 @@ class Hgt:
             p = row['position']
             origins = row['origins']
             origins = [element.lstrip() for element in origins.split(',')]
-            origins = origins + [self.query_strain]
             for origin in set(origins):
                 bam = join(self.out_dir, origin + '.sorted.bam')
                 steps = int(p/self.step)
