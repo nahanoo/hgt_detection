@@ -15,7 +15,7 @@ class Hgt:
     are aligned to all parsed reference genomes.
     All positions with foreign sequences are outputted as a tsv.
     Additionally it annotates the foreign sequences and plots
-    the alignemnt to all reference genomes."""
+    the alignments."""
 
     def __init__(self, args):
         # Out direcotry to write files
@@ -28,6 +28,7 @@ class Hgt:
         # Contigs in list form
         self.query_contigs = [contig for contig in SeqIO.parse(
             self.query, 'genbank')]
+        # Features of mutant
         self.query_features = self.parse_genbank()
         # Ancestor fasta file
         self.ancestor = args.ancestor
@@ -45,7 +46,7 @@ class Hgt:
         # Dataframe for anntoations
         self.annotated = pd.DataFrame(
             columns=['chromosome', 'position', 'length', 'origins', 'product'])
-
+        # List for items to deltet at the end
         self.trash = []
 
         # If plots should be generated directory is created
@@ -136,12 +137,14 @@ class Hgt:
         # Calling samtools and surpressing stdout
         call(" ".join(cmd), shell=True, stdout=DEVNULL,
              stderr=STDOUT)
+        # Storing which files to delete at the end
         if out not in self.trash:
             self.trash.append(out)
             self.trash.append(bam)
             self.trash.append(bam+'.bai')
 
     def map_chunks(self):
+        """Calls mapper to align mutant to references."""
         for strain, reference in self.references.items():
             out = join(self.out_dir, strain + ".sam")
             self.mapper(reference,self.chunks,out)
@@ -246,9 +249,11 @@ class Hgt:
             for read in a:
                 if (not read.is_unmapped):
                     unique = False
+            # Adding ancestor to output if sequence was found
             if not unique:
                 self.origins_df.at[i, 'origins'] += ', ' + \
                     self.ancestor_name
+            # Deletes tmp seqs
             if query_seq not in self.trash:
                 self.trash.append(query_seq)
 
@@ -257,16 +262,15 @@ class Hgt:
         with either two different origins or an origin which is not anceteral
         are of interest"""
         self.concat_origins()
-        # Creating string of origins stored as list
         self.check_sequence()
         self.origins_df.to_csv(
             join(self.out_dir, 'hgts.tsv'), sep='\t', index=False)
-        # Dumping to json and tsv
         self.annotate_hgts()
         self.annotated.to_csv(
             join(self.out_dir, 'hgts.annotated.tsv'), sep='\t', index=False)
 
     def plot_hgts(self):
+        """Plots alignemtns to reference genomes and ancestor."""
         # Create plot dir
         out = join(self.out_dir, 'plots', 'hgt_alignments')
         if not exists(out):
@@ -297,9 +301,11 @@ class Hgt:
         for i, row in df.iterrows():
             c = row['chromosome']
             p = row['position']
+            # Plots features
             plot_genbank(self.query_contigs, c, p, out)
 
     def clean(self):
+        """Cleans created files."""
         for item in self.trash:
             remove(item)
 
