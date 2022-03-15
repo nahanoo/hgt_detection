@@ -21,11 +21,12 @@ def main():
     args = parse_args()
     hgt = Hgt(args)
     hgt.chunk_assembly()
-    hgt.mapper()
+    hgt.map_chunks()
     hgt.get_mapping_stats()
     hgt.dump_origins()
     if args.plot:
         hgt.plot_hgt_annotations()
         hgt.plot_hgts()
+    hgt.clean()
 
 main()
