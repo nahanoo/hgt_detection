@@ -1,14 +1,12 @@
-from calendar import c
 from os.path import join, split as path_split, exists
-from os import listdir, mkdir
+from os import listdir, mkdir, remove
 from Bio import SeqIO
 from subprocess import call, DEVNULL, STDOUT
-import subprocess
 import pysam
 from Bio.SeqRecord import SeqRecord
 import pandas as pd
 from plotting import plot_alignment, plot_genbank
-
+from fnmatch import fnmatch
 
 class Hgt:
     """This is a simple class for detecting HGTs in mutated
@@ -33,6 +31,8 @@ class Hgt:
         self.query_features = self.parse_genbank()
         # Ancestor fasta file
         self.ancestor = args.ancestor
+        # Ancestor name
+        self.ancestor_name = path_split(self.ancestor)[-1].split('.')[0]
         # Step size for sliding windows algorithm
         self.step = 100
         # Window size for sliding window algorithm
@@ -45,6 +45,8 @@ class Hgt:
         # Dataframe for anntoations
         self.annotated = pd.DataFrame(
             columns=['chromosome', 'position', 'length', 'origins', 'product'])
+
+        self.trash = []
 
         # If plots should be generated directory is created
         if args.plot:
@@ -104,41 +106,45 @@ class Hgt:
             # Creates chunks of every contig
             assembly_chunks += self.chunker(contig,
                                             self.window_size, self.step)
-        target = join(self.out_dir,
+        self.chunks = join(self.out_dir,
                       "chunked_sequences.fasta")
         # Dumps chunks to fasta
-        with open(target, "w") as handle:
+        with open(self.chunks, "w") as handle:
             SeqIO.write(assembly_chunks, handle, "fasta")
+        self.trash.append(self.chunks)
 
-    def mapper(self):
-        """Maps chunked sequence to all ancesteral genomes
-        experiment with minimap2.
-        Minimap2 settings are set to accureate PacBio reads."""
-        reads = join(self.out_dir, "chunked_sequences.fasta")
+    def mapper(self, reference, reads, out):
+        """Maps long accurate sequences to references with minimap2."""
+        cmd = [
+            "minimap2",
+            "-ax",
+            "asm5",
+            reference,
+            reads,
+            ">",
+            out,
+        ]
+        bam = out.replace('.sam', '.sorted.bam')
+        # Calling minimap and surpressing stdout
+        call(" ".join(cmd), shell=True, stdout=DEVNULL,
+             stderr=STDOUT)
+        cmd = ['samtools', 'sort', '-o', bam, out]
+        # Calling samtools and surpressing stdout
+        call(" ".join(cmd), shell=True, stdout=DEVNULL,
+             stderr=STDOUT)
+        cmd = ['samtools', 'index', bam]
+        # Calling samtools and surpressing stdout
+        call(" ".join(cmd), shell=True, stdout=DEVNULL,
+             stderr=STDOUT)
+        if out not in self.trash:
+            self.trash.append(out)
+            self.trash.append(bam)
+            self.trash.append(bam+'.bai')
+
+    def map_chunks(self):
         for strain, reference in self.references.items():
-            # Query sequences created with chunk_assembly()
-            sam = join(self.out_dir, strain + ".sam")
-            bam = join(self.out_dir, strain + ".sorted.bam")
-            cmd = [
-                "minimap2",
-                "-ax",
-                "asm5",
-                reference,
-                reads,
-                ">",
-                sam,
-            ]
-            # Calling minimap and surpressing stdout
-            call(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL,
-                 stderr=STDOUT)
-            cmd = ['samtools', 'sort', '-o', bam, sam]
-            # Calling samtools and surpressing stdout
-            call(" ".join(cmd), shell=True, stdout=DEVNULL,
-                 stderr=STDOUT)
-            cmd = ['samtools', 'index', bam]
-            # Calling samtools and surpressing stdout
-            call(" ".join(cmd), shell=True, stdout=DEVNULL,
-                 stderr=STDOUT)
+            out = join(self.out_dir, strain + ".sam")
+            self.mapper(reference,self.chunks,out)
 
     def get_mapping_stats(self):
         """Checks all mapped sequences and returns contig name
@@ -225,19 +231,16 @@ class Hgt:
             else:
                 end = length + position
             # Hgt sequence and sam
-            query_seq = join(self.out_dir, 'query_seq.fasta')
-            query_sam = join(self.out_dir, 'query_sam.fasta')
+            query_seq = join(self.out_dir, 'query.fasta')
+            query_out = join(self.out_dir, 'query.sam')
             # Dumping hgt sequence
             seq_id = contigs[chromosome].id
             seq = contigs[chromosome].seq[position:end]
             with open(query_seq, 'w') as handle:
                 SeqIO.write(SeqRecord(seq=seq, id=seq_id), handle, 'fasta')
             # Mapping hgt sequence to ancestor
-            cmd = ['minimap2', '-ax', 'asm5',
-                   self.ancestor, query_seq, '>', query_sam]
-            call(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL,
-                 stderr=STDOUT)
-            a = pysam.AlignmentFile(query_sam)
+            self.mapper(self.ancestor,query_seq,query_out)
+            a = pysam.AlignmentFile(query_out)
             unique = True
             # If sequence aligned to ancestor seq was already present
             for read in a:
@@ -245,7 +248,9 @@ class Hgt:
                     unique = False
             if not unique:
                 self.origins_df.at[i, 'origins'] += ', ' + \
-                    path_split(self.ancestor)[-1].split('.')[0]
+                    self.ancestor_name
+            if query_seq not in self.trash:
+                self.trash.append(query_seq)
 
     def dump_origins(self):
         """Filters identified origins and dumps to json. Only positions
@@ -255,11 +260,11 @@ class Hgt:
         # Creating string of origins stored as list
         self.check_sequence()
         self.origins_df.to_csv(
-            join(self.out_dir, 'origins.tsv'), sep='\t', index=False)
+            join(self.out_dir, 'hgts.tsv'), sep='\t', index=False)
         # Dumping to json and tsv
         self.annotate_hgts()
         self.annotated.to_csv(
-            join(self.out_dir, 'origins.annotated.tsv'), sep='\t', index=False)
+            join(self.out_dir, 'hgts.annotated.tsv'), sep='\t', index=False)
 
     def plot_hgts(self):
         # Create plot dir
@@ -267,6 +272,8 @@ class Hgt:
         if not exists(out):
             mkdir(out)
         # Reads identified origins
+        sam = join(self.out_dir,self.ancestor_name+'.sam')
+        self.mapper(self.ancestor,self.chunks,sam)
         for i, row in self.origins_df.iterrows():
             c = row['chromosome']
             p = row['position']
@@ -291,3 +298,8 @@ class Hgt:
             c = row['chromosome']
             p = row['position']
             plot_genbank(self.query_contigs, c, p, out)
+
+    def clean(self):
+        for item in self.trash:
+            remove(item)
+
