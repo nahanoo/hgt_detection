@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(name='hgt_detection',
       version='1.0',
-      description="Detects and visualizes horizontal gene transfers in bacterial communities.",
+      description="Detects horizontal gene transfers from assemblies of bacterial communities.",
       author='Eric Ulrich',
       url='https://github.com/nahanoo/hgt',
       packages=['hgt'],
