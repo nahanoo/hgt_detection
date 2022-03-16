@@ -296,8 +296,7 @@ class Hgt:
         out = join(self.out_dir, 'plots', 'hgt_annotations')
         if not exists(out):
             mkdir(out)
-        df = pd.read_csv(join(self.out_dir, 'origins.tsv'), sep='\t')
-        for i, row in df.iterrows():
+        for i, row in self.origins_df.iterrows():
             c = row['chromosome']
             p = row['position']
             # Plots features
