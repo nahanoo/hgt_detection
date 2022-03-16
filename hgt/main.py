@@ -6,9 +6,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Detect HGTs in bacteria evolved in co-cultures.')
     parser.add_argument(
-        'mutant', help='genbank file of mutant')
+        'mutant', help='genbank file of the mutant')
     parser.add_argument(
-        'ancestor', help='Fasta file of ancestor. Prefix of fasta file will be interpreted as strain name.')
+        'ancestor', help='Fasta file of the ancestor. Prefix of fasta file will be interpreted as strain name.')
     parser.add_argument(
         'references', help='Folder containing all genomes in fasta format of co-cultured bacteria.\
             Prefix of fasta file will be interpreted as strain name.'
@@ -31,6 +31,3 @@ def main():
         hgt.plot_hgt_annotations()
         hgt.plot_hgts()
     hgt.clean()
-
-
-main()
