@@ -1,5 +1,5 @@
 
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(name='hgt_detection',
       version='1.0',
