@@ -5,8 +5,7 @@ from subprocess import call, DEVNULL, STDOUT
 import pysam
 from Bio.SeqRecord import SeqRecord
 import pandas as pd
-from plotting import plot_alignment, plot_genbank
-from fnmatch import fnmatch
+from .plotting import plot_alignment, plot_genbank
 
 class Hgt:
     """This is a simple class for detecting HGTs in mutated
@@ -14,7 +13,7 @@ class Hgt:
     sequences using a sliding window algorithm. Those sequences
     are aligned to all parsed reference genomes.
     All positions with foreign sequences are outputted as a tsv.
-    Additionally it annotates the foreign sequences and plots
+    Additionally it annotates the sequences and plots
     the alignments."""
 
     def __init__(self, args):
@@ -38,7 +37,7 @@ class Hgt:
         self.step = 100
         # Window size for sliding window algorithm
         self.window_size = 500
-        # Dictionary storing origins of sequence in assembly
+        # Dictionary storing origins of sequences in assembly
         self.origins = {contig.id: dict() for contig in self.query_contigs}
         # Dataframe for origins
         self.origins_df = pd.DataFrame(
