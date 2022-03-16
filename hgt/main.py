@@ -1,5 +1,6 @@
 import argparse
-from hgt import Hgt
+from .hgt import Hgt
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -7,15 +8,17 @@ def parse_args():
     parser.add_argument(
         'mutant', help='genbank file of mutant')
     parser.add_argument(
-        'ancestor', help='fasta file of ancestor')
+        'ancestor', help='Fasta file of ancestor. Prefix of fasta file will be interpreted as strain name.')
     parser.add_argument(
         'references', help='Folder containing all genomes in fasta format of co-cultured bacteria.\
             Prefix of fasta file will be interpreted as strain name.'
     )
     parser.add_argument('out_dir', help='output directory')
-    parser.add_argument('--plot', help='plot alignments and annotations', action='store_true')
+    parser.add_argument(
+        '--plot', help='plot alignments and annotations', action='store_true')
 
     return parser.parse_args()
+
 
 def main():
     args = parse_args()
@@ -28,5 +31,6 @@ def main():
         hgt.plot_hgt_annotations()
         hgt.plot_hgts()
     hgt.clean()
+
 
 main()
